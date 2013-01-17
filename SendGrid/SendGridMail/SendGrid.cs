@@ -1,556 +1,596 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Net;
-using System.Net.Mail;
-using System.Net.Mime;
-using SendGridMail.Transport;
-
-namespace SendGridMail
+﻿namespace SendGridMail
 {
-    public class SendGrid : ISendGrid
-    {
-        #region constants/vars
-        //private/constant vars:
-        private static readonly Dictionary<String, String> Filters = InitializeFilters();
-        private MailMessage message;
-
-        // TODO find appropriate types for these
-        const string encoding = "quoted-printable";
-        const string charset = "utf-8";
-
-        //apps list and settings
-        private const String ReText = @"<\%\s*\%>";
-        private const String ReHtml = @"<\%\s*[^\s]+\s*\%>";
-        #endregion
-
-        #region Initialization and Constructors
-        /// <summary>
-        /// Creates an instance of SendGrid's custom message object
-        /// </summary>
-        /// <returns></returns>
-        public static SendGrid GetInstance()
-        {
-            var header = new Header();
-            return new SendGrid(header);
-        }
-
-        /// <summary>
-        /// Creates an instance of SendGrid's custom message object with mail parameters
-        /// </summary>
-        /// <param name="from">The email address of the sender</param>
-        /// <param name="to">An array of the recipients</param>
-        /// <param name="cc">Supported over SMTP, with future plans for support in the Web transport</param>
-        /// <param name="bcc">Blind recipients</param>
-        /// <param name="subject">The subject of the message</param>
-        /// <param name="html">the html content for the message</param>
-        /// <param name="text">the plain text part of the message</param>
-        /// <param name="transport">Transport class to use for sending the message</param>
-        /// <returns></returns>
-        public static SendGrid GetInstance(MailAddress from, MailAddress[] to, MailAddress[] cc, MailAddress[] bcc,
-                                                String subject, String html, String text)
-        {
-            var header = new Header();
-            return new SendGrid(from, to, cc, bcc, subject, html, text, header);
-        }
-
-        internal SendGrid(MailAddress from, MailAddress[] to, MailAddress[] cc, MailAddress[] bcc, 
-            String subject, String html, String text, IHeader header = null ) : this(header)
-        {
-            From = from;
-            To = to;
-            Cc = cc;
-            Bcc = bcc;
-
-            message.Subject = subject;
-
-            Text = text;
-            Html = html;
-        }
-
-        internal SendGrid(IHeader header)
-        {
-            message = new MailMessage();
-            Header = header;
-            Headers = new Dictionary<string, string>();
-        }
-
-        private static Dictionary<string, string> InitializeFilters()
-        {
-            return
-            new Dictionary<string, string>
-            {
-                {"Gravatar", "gravatar"},
-                {"OpenTracking", "opentrack"},
-                {"ClickTracking", "clicktrack"},
-                {"SpamCheck", "spamcheck"},
-                {"Unsubscribe", "subscriptiontrack"},
-                {"Footer", "footer"},
-                {"GoogleAnalytics", "ganalytics"},
-                {"Template", "template"},
-                {"Bcc", "bcc"},
-                {"BypassListManagement", "bypass_list_management"}
-            };
-        }
-        #endregion
-
-        #region Properties
-        public MailAddress From
-        {
-            get
-            {
-                return message.From;
-            }
-            set
-            {
-                if (value != null) message.From = value;
-            }
-        }
-
-        public MailAddress[] ReplyTo
-        {
-            get
-            {
-                return message.ReplyToList.ToArray();
-            }
-            set
-            {
-                message.ReplyToList.Clear();
-                foreach (var replyTo in value)
-                {
-                    message.ReplyToList.Add(replyTo);
-                }
-            }
-        }
-
-        public MailAddress[] To
-        {
-            get
-            {
-                return message.To.ToArray();
-            }
-            set
-            {
-                message.To.Clear();
-                foreach (var mailAddress in value)
-                {
-                    message.To.Add(mailAddress);
-                }
-            }
-        }
-
-        public MailAddress[] Cc
-        {
-            get
-            {
-                return message.CC.ToArray();
-            }
-            set
-            {
-                message.CC.Clear();
-                foreach (var mailAddress in value)
-                {
-                    message.CC.Add(mailAddress);
-                }
-            }
-        }
-
-        public MailAddress[] Bcc
-        {
-            get
-            {
-                return message.Bcc.ToArray();
-            }
-            set
-            {
-                message.Bcc.Clear();
-                foreach (var mailAddress in value)
-                {
-                    message.Bcc.Add(mailAddress);
-                }
-            }
-        }
-
-        public String Subject
-        {
-            get
-            {
-                return message.Subject;
-            }
-            set
-            {
-                if (value != null) message.Subject = value;
-            }
-        }
-
-        public Dictionary<String, String> Headers { get; set; }
-        public IHeader Header { get; set; }
-        public String Html { get; set; }
-        public String Text { get; set; }
-        #endregion
-
-        #region Methods for setting data
-        public void AddTo(String address)
-        {
-            var mailAddress = new MailAddress(address);
-            message.To.Add(mailAddress);
-        }
-
-        public void AddTo(IEnumerable<String> addresses)
-        {
-            if (addresses != null)
-            {
-                foreach (var address in addresses)
-                {
-                    if (address != null) AddTo(address);
-                }
-            }
-        }
-
-        public void AddTo(IDictionary<String, IDictionary<String, String>> addresssInfo)
-        {
-            foreach (var address in addresssInfo.Keys)
-            {
-                var table = addresssInfo[address];
-                //DisplayName is the only option that this implementation of MailAddress implements.
-                var mailAddress = new MailAddress(address, table.ContainsKey("DisplayName") ? table["DisplayName"] : null);
-                message.To.Add(mailAddress);
-            }
-        }
-
-        public void AddCc(String address)
-        {
-            var mailAddress = new MailAddress(address);
-            message.CC.Add(mailAddress);
-        }
-
-        public void AddCc(IEnumerable<String> addresses)
-        {
-            if (addresses != null)
-            {
-                foreach (var address in addresses)
-                {
-                    if (address != null) AddCc(address);
-                }
-            }
-        }
-
-        public void AddCc(IDictionary<String, IDictionary<String, String>> addresssInfo)
-        {
-            foreach (var address in addresssInfo.Keys)
-            {
-                var table = addresssInfo[address];
-                //DisplayName is the only option that this implementation of MailAddress implements.
-                var mailAddress = new MailAddress(address, table.ContainsKey("DisplayName") ? table["DisplayName"] : null);
-                message.CC.Add(mailAddress);
-            }
-        }
-
-        public void AddBcc(String address)
-        {
-            var mailAddress = new MailAddress(address);
-            message.Bcc.Add(mailAddress);
-        }
-
-        public void AddBcc(IEnumerable<String> addresses)
-        {
-            if (addresses != null)
-            {
-                foreach (var address in addresses)
-                {
-                    if (address != null) AddBcc(address);
-                }
-            }
-        }
-
-        public void AddBcc(IDictionary<String, IDictionary<String, String>> addresssInfo)
-        {
-            foreach (var address in addresssInfo.Keys)
-            {
-                var table = addresssInfo[address];
-                //DisplayName is the only option that this implementation of MailAddress implements.
-                var mailAddress = new MailAddress(address, table.ContainsKey("DisplayName") ? table["DisplayName"] : null);
-                message.Bcc.Add(mailAddress);
-            }
-        }
-
-        private Dictionary<String, MemoryStream> _streamedAttachments = new Dictionary<string, MemoryStream>();
-        public Dictionary<String, MemoryStream> StreamedAttachments
-        {
-            get { return _streamedAttachments; }
-            set { _streamedAttachments = value; }
-        }
-
-        private List<String> _attachments = new List<String>(); 
-        public String[] Attachments
-        {
-            get { return _attachments.ToArray(); }
-            set { _attachments = value.ToList(); }
-        }
-
-        public void AddSubVal(String replacementTag, List<String> substitutionValues)
-        {
-            //let the system complain if they do something bad, since the function returns null
-            Header.AddSubVal(replacementTag, substitutionValues);
-        }
-
-        public void AddUniqueIdentifiers(IDictionary<String, String> identifiers)
-        {
-            Header.AddUniqueIdentifier(identifiers);
-        }
-
-        public void SetCategory(String category)
-        {
-            Header.SetCategory(category);
-        }
-
-        public void AddAttachment(Stream stream, String name)
-        {
-            MemoryStream ms = new MemoryStream();
-            stream.CopyTo(ms);
-			ms.Seek(0,SeekOrigin.Begin);
-            StreamedAttachments[name] = ms;
-        }
-
-        public void AddAttachment(String filePath)
-        {
-            _attachments.Add(filePath);
-        }
-
-        public IEnumerable<String> GetRecipients()
-        {
-            List<MailAddress> tos = message.To.ToList();
-            List<MailAddress> ccs = message.CC.ToList();
-            List<MailAddress> bccs = message.Bcc.ToList();
-
-            var rcpts = tos.Union(ccs.Union(bccs)).Select(address => address.Address);
-            return rcpts;
-        }
-
-        public void AddHeaders(IDictionary<string, string> headers)
-        {
-            headers.Keys.ToList().ForEach(key => Headers[key] = headers[key]);
-        }
-        #endregion
-
-        #region SMTP API Functions
-        public void DisableGravatar()
-        {
-            Header.Disable(Filters["Gravatar"]);
-        }
-
-        public void DisableOpenTracking()
-        {
-            Header.Disable(Filters["OpenTracking"]);
-        }
-
-        public void DisableClickTracking()
-        {
-            Header.Disable(Filters["ClickTracking"]);
-        }
-
-        public void DisableSpamCheck()
-        {
-            Header.Disable(Filters["SpamCheck"]);
-        }
-
-        public void DisableUnsubscribe()
-        {
-            Header.Disable(Filters["Unsubscribe"]);
-        }
-
-        public void DisableFooter()
-        {
-            Header.Disable(Filters["Footer"]);
-        }
-
-        public void DisableGoogleAnalytics()
-        {
-            Header.Disable(Filters["GoogleAnalytics"]);
-        }
-
-        public void DisableTemplate()
-        {
-            Header.Disable(Filters["Template"]);
-        }
-
-        public void DisableBcc()
-        {
-            Header.Disable(Filters["Bcc"]);
-        }
-
-        public void DisableBypassListManagement()
-        {
-            Header.Disable(Filters["BypassListManagement"]);
-        }
-
-        public void EnableGravatar()
-        {
-            Header.Enable(Filters["Gravatar"]);
-        }
-
-        public void EnableOpenTracking()
-        {
-            Header.Enable(Filters["OpenTracking"]);
-        }
-
-        public void EnableClickTracking(bool includePlainText = false)
-        {
-            var filter = Filters["ClickTracking"];
-                
-            Header.Enable(filter);
-            if (includePlainText)
-            {
-                Header.AddFilterSetting(filter, new List<string> { "enable_text" }, "1");
-            }
-        }
-
-        public void EnableSpamCheck(int score = 5, string url = null)
-        {
-            var filter = Filters["SpamCheck"];
-
-            Header.Enable(filter);
-            Header.AddFilterSetting(filter, new List<string> { "maxscore" }, score.ToString(CultureInfo.InvariantCulture));
-            Header.AddFilterSetting(filter, new List<string> { "url" }, url);
-        }
-
-        public void EnableUnsubscribe(string text, string html)
-        {
-            var filter = Filters["Unsubscribe"];
-
-            if(!System.Text.RegularExpressions.Regex.IsMatch(text, ReText))
-            {
-                throw new Exception("Missing substitution replacementTag in text");
-            }
-
-            if(!System.Text.RegularExpressions.Regex.IsMatch(html, ReHtml))
-            {
-                throw new Exception("Missing substitution replacementTag in html");
-            }
-
-            Header.Enable(filter);
-            Header.AddFilterSetting(filter, new List<string> { "text/plain" }, text);
-            Header.AddFilterSetting(filter, new List<string> {"text/html"}, html);
-        }
-
-        public void EnableUnsubscribe(string replace)
-        {
-            var filter = Filters["Unsubscribe"];
-
-            Header.Enable(filter);
-            Header.AddFilterSetting(filter, new List<string> { "replace" }, replace);
-        }
-
-        public void EnableFooter(string text = null, string html = null)
-        {
-            var filter = Filters["Footer"];
-
-            Header.Enable(filter);
-            Header.AddFilterSetting(filter, new List<string> { "text/plain" }, text);
-            Header.AddFilterSetting(filter, new List<string> { "text/html" }, html);
-        }
-
-        public void EnableGoogleAnalytics(string source, string medium, string term, string content = null, string campaign = null)
-        {
-            var filter = Filters["GoogleAnalytics"];
-
-            Header.Enable(filter);
-            Header.AddFilterSetting(filter, new List<string> { "utm_source" }, source);
-            Header.AddFilterSetting(filter, new List<string> { "utm_medium" }, medium);
-            Header.AddFilterSetting(filter, new List<string> { "utm_term" }, term);
-            Header.AddFilterSetting(filter, new List<string> { "utm_content" }, content);
-            Header.AddFilterSetting(filter, new List<string> { "utm_campaign" }, campaign);
-        }
-
-        public void EnableTemplate(string html)
-        {
-            var filter = Filters["Template"];
-
-            if (!System.Text.RegularExpressions.Regex.IsMatch(html, ReHtml))
-            {
-                throw new Exception("Missing substitution replacementTag in html");
-            }
-
-            Header.Enable(filter);
-            Header.AddFilterSetting(filter, new List<string> { "text/html" }, html);
-        }
-
-        public void EnableBcc(string email)
-        {
-            var filter = Filters["Bcc"];
-
-            Header.Enable(filter);
-            Header.AddFilterSetting(filter, new List<string> { "email" }, email);
-        }
-
-        public void EnableBypassListManagement()
-        {
-            Header.Enable(Filters["BypassListManagement"]);
-        }
-        #endregion
-
-        public MailMessage CreateMimeMessage()
-        {
-            String smtpapi = Header.AsJson();
-
-            if (!String.IsNullOrEmpty(smtpapi))
-                message.Headers.Add("X-Smtpapi", smtpapi);
-
-            Headers.Keys.ToList().ForEach(k => message.Headers.Add(k, Headers[k]));
-
-            message.Attachments.Clear();
-            message.AlternateViews.Clear();
-
-            if(Attachments != null)
-            {
-                foreach (var attachment in Attachments)
-                {
-                    message.Attachments.Add(new Attachment(attachment, MediaTypeNames.Application.Octet));
-                }                
-            }
-
-            if(StreamedAttachments != null)
-            {
-                foreach (var attachment in StreamedAttachments)
-                {
-                    attachment.Value.Position = 0;
-                    message.Attachments.Add(new Attachment(attachment.Value, attachment.Key));
-                }
-            }
-
-            if (Text != null)
-            {
-                AlternateView plainView = AlternateView.CreateAlternateViewFromString(Text, null, "text/plain");
-                message.AlternateViews.Add(plainView);
-            }
-
-            if (Html != null)
-            {
-                AlternateView htmlView = AlternateView.CreateAlternateViewFromString(Html, null, "text/html");
-                message.AlternateViews.Add(htmlView);
-            }
-            
-            //message.SubjectEncoding = Encoding.GetEncoding(charset);
-            //message.BodyEncoding = Encoding.GetEncoding(charset);
-
-            return message;
-        }
-
-        /// <summary>
-        /// Helper function lets us look at the mime before it is sent
-        /// </summary>
-        /// <param name="directory">directory in which we store this mime message</param>
-        internal void SaveMessage(String directory)
-        {
-            var client = new SmtpClient("localhost")
-                             {
-                                 DeliveryMethod = SmtpDeliveryMethod.SpecifiedPickupDirectory,
-                                 PickupDirectoryLocation = @"C:\temp"
-                             };
-            var msg = CreateMimeMessage();
-            client.Send(msg);
-        }
-    }
+	using System;
+	using System.Collections.Generic;
+	using System.Globalization;
+	using System.IO;
+	using System.Linq;
+	using System.Net.Mail;
+	using System.Net.Mime;
+	using System.Text.RegularExpressions;
+
+	public class SendGrid : ISendGrid
+	{
+		// private/constant vars:
+		#region Constants
+
+		private const string ReHtml = @"<\%\s*[^\s]+\s*\%>";
+
+		private const string ReText = @"<\%\s*\%>";
+
+		#endregion
+
+		#region Static Fields
+
+		private static readonly Dictionary<string, string> Filters = InitializeFilters();
+
+		#endregion
+
+		#region Fields
+
+		private readonly MailMessage message;
+
+		private List<string> attachments = new List<string>();
+
+		private Dictionary<string, MemoryStream> streamedAttachments = new Dictionary<string, MemoryStream>();
+
+		#endregion
+
+		// TODO find appropriate types for these
+		#region Constructors and Destructors
+
+		internal SendGrid(MailAddress from, MailAddress[] to, MailAddress[] cc, MailAddress[] bcc, string subject, string html, string text, IHeader header = null)
+			: this(header)
+		{
+			this.From = from;
+			this.To = to;
+			this.Cc = cc;
+			this.Bcc = bcc;
+
+			this.message.Subject = subject;
+
+			this.Text = text;
+			this.Html = html;
+		}
+
+		internal SendGrid(IHeader header)
+		{
+			this.message = new MailMessage();
+			this.Header = header;
+			this.Headers = new Dictionary<string, string>();
+		}
+
+		#endregion
+
+		#region Public Properties
+
+		public string[] Attachments
+		{
+			get
+			{
+				return this.attachments.ToArray();
+			}
+
+			set
+			{
+				this.attachments = value.ToList();
+			}
+		}
+
+		public MailAddress[] Bcc
+		{
+			get
+			{
+				return this.message.Bcc.ToArray();
+			}
+
+			set
+			{
+				this.message.Bcc.Clear();
+				foreach (MailAddress mailAddress in value)
+				{
+					this.message.Bcc.Add(mailAddress);
+				}
+			}
+		}
+
+		public MailAddress[] Cc
+		{
+			get
+			{
+				return this.message.CC.ToArray();
+			}
+
+			set
+			{
+				this.message.CC.Clear();
+				foreach (MailAddress mailAddress in value)
+				{
+					this.message.CC.Add(mailAddress);
+				}
+			}
+		}
+
+		public MailAddress From
+		{
+			get
+			{
+				return this.message.From;
+			}
+
+			set
+			{
+				if (value != null)
+				{
+					this.message.From = value;
+				}
+			}
+		}
+
+		public IHeader Header { get; set; }
+
+		public Dictionary<string, string> Headers { get; set; }
+
+		public string Html { get; set; }
+
+		public MailAddress[] ReplyTo
+		{
+			get
+			{
+				return this.message.ReplyToList.ToArray();
+			}
+
+			set
+			{
+				this.message.ReplyToList.Clear();
+				foreach (MailAddress replyTo in value)
+				{
+					this.message.ReplyToList.Add(replyTo);
+				}
+			}
+		}
+
+		public Dictionary<string, MemoryStream> StreamedAttachments
+		{
+			get
+			{
+				return this.streamedAttachments;
+			}
+
+			set
+			{
+				this.streamedAttachments = value;
+			}
+		}
+
+		public string Subject
+		{
+			get
+			{
+				return this.message.Subject;
+			}
+
+			set
+			{
+				if (value != null)
+				{
+					this.message.Subject = value;
+				}
+			}
+		}
+
+		public string Text { get; set; }
+
+		public MailAddress[] To
+		{
+			get
+			{
+				return this.message.To.ToArray();
+			}
+
+			set
+			{
+				this.message.To.Clear();
+				foreach (MailAddress mailAddress in value)
+				{
+					this.message.To.Add(mailAddress);
+				}
+			}
+		}
+
+		#endregion
+
+		#region Public Methods and Operators
+
+		/// <summary>
+		///     Creates an instance of SendGrid's custom message object
+		/// </summary>
+		/// <returns></returns>
+		public static SendGrid GetInstance()
+		{
+			Header header = new Header();
+			return new SendGrid(header);
+		}
+
+		/// <summary>
+		///     Creates an instance of SendGrid's custom message object with mail parameters
+		/// </summary>
+		/// <param name="from">The email address of the sender</param>
+		/// <param name="to">An array of the recipients</param>
+		/// <param name="cc">Supported over SMTP, with future plans for support in the Web transport</param>
+		/// <param name="bcc">Blind recipients</param>
+		/// <param name="subject">The subject of the message</param>
+		/// <param name="html">the html content for the message</param>
+		/// <param name="text">the plain text part of the message</param>
+		/// <returns></returns>
+		public static SendGrid GetInstance(MailAddress from, MailAddress[] to, MailAddress[] cc, MailAddress[] bcc, string subject, string html, string text)
+		{
+			Header header = new Header();
+			return new SendGrid(from, to, cc, bcc, subject, html, text, header);
+		}
+
+		public void AddAttachment(Stream stream, string name)
+		{
+			MemoryStream ms = new MemoryStream();
+			stream.CopyTo(ms);
+			ms.Seek(0, SeekOrigin.Begin);
+			this.StreamedAttachments[name] = ms;
+		}
+
+		public void AddAttachment(string filePath)
+		{
+			this.attachments.Add(filePath);
+		}
+
+		public void AddBcc(string address)
+		{
+			MailAddress mailAddress = new MailAddress(address);
+			this.message.Bcc.Add(mailAddress);
+		}
+
+		public void AddBcc(IEnumerable<string> addresses)
+		{
+			if (addresses != null)
+			{
+				foreach (string address in addresses)
+				{
+					if (address != null)
+					{
+						this.AddBcc(address);
+					}
+				}
+			}
+		}
+
+		public void AddBcc(IDictionary<string, IDictionary<string, string>> addresssInfo)
+		{
+			foreach (string address in addresssInfo.Keys)
+			{
+				IDictionary<string, string> table = addresssInfo[address];
+
+				// DisplayName is the only option that this implementation of MailAddress implements.
+				MailAddress mailAddress = new MailAddress(address, table.ContainsKey("DisplayName") ? table["DisplayName"] : null);
+				this.message.Bcc.Add(mailAddress);
+			}
+		}
+
+		public void AddCc(string address)
+		{
+			MailAddress mailAddress = new MailAddress(address);
+			this.message.CC.Add(mailAddress);
+		}
+
+		public void AddCc(IEnumerable<string> addresses)
+		{
+			if (addresses != null)
+			{
+				foreach (string address in addresses)
+				{
+					if (address != null)
+					{
+						this.AddCc(address);
+					}
+				}
+			}
+		}
+
+		public void AddCc(IDictionary<string, IDictionary<string, string>> addresssInfo)
+		{
+			foreach (string address in addresssInfo.Keys)
+			{
+				IDictionary<string, string> table = addresssInfo[address];
+
+				// DisplayName is the only option that this implementation of MailAddress implements.
+				MailAddress mailAddress = new MailAddress(address, table.ContainsKey("DisplayName") ? table["DisplayName"] : null);
+				this.message.CC.Add(mailAddress);
+			}
+		}
+
+		public void AddHeaders(IDictionary<string, string> headers)
+		{
+			headers.Keys.ToList().ForEach(key => this.Headers[key] = headers[key]);
+		}
+
+		public void AddSubVal(string replacementTag, List<string> substitutionValues)
+		{
+			// let the system complain if they do something bad, since the function returns null
+			this.Header.AddSubVal(replacementTag, substitutionValues);
+		}
+
+		public void AddTo(string address)
+		{
+			MailAddress mailAddress = new MailAddress(address);
+			this.message.To.Add(mailAddress);
+		}
+
+		public void AddTo(IEnumerable<string> addresses)
+		{
+			if (addresses != null)
+			{
+				foreach (string address in addresses)
+				{
+					if (address != null)
+					{
+						this.AddTo(address);
+					}
+				}
+			}
+		}
+
+		public void AddTo(IDictionary<string, IDictionary<string, string>> addresssInfo)
+		{
+			foreach (string address in addresssInfo.Keys)
+			{
+				IDictionary<string, string> table = addresssInfo[address];
+
+				// DisplayName is the only option that this implementation of MailAddress implements.
+				MailAddress mailAddress = new MailAddress(address, table.ContainsKey("DisplayName") ? table["DisplayName"] : null);
+				this.message.To.Add(mailAddress);
+			}
+		}
+
+		public void AddUniqueIdentifiers(IDictionary<string, string> identifiers)
+		{
+			this.Header.AddUniqueIdentifier(identifiers);
+		}
+
+		public MailMessage CreateMimeMessage()
+		{
+			string smtpapi = this.Header.AsJson();
+
+			if (!string.IsNullOrEmpty(smtpapi))
+			{
+				this.message.Headers.Add("X-Smtpapi", smtpapi);
+			}
+
+			this.Headers.Keys.ToList().ForEach(k => this.message.Headers.Add(k, this.Headers[k]));
+
+			this.message.Attachments.Clear();
+			this.message.AlternateViews.Clear();
+
+			if (this.Attachments != null)
+			{
+				foreach (string attachment in this.Attachments)
+				{
+					this.message.Attachments.Add(new Attachment(attachment, MediaTypeNames.Application.Octet));
+				}
+			}
+
+			if (this.StreamedAttachments != null)
+			{
+				foreach (KeyValuePair<string, MemoryStream> attachment in this.StreamedAttachments)
+				{
+					attachment.Value.Position = 0;
+					this.message.Attachments.Add(new Attachment(attachment.Value, attachment.Key));
+				}
+			}
+
+			if (this.Text != null)
+			{
+				AlternateView plainView = AlternateView.CreateAlternateViewFromString(this.Text, null, "text/plain");
+				this.message.AlternateViews.Add(plainView);
+			}
+
+			if (this.Html != null)
+			{
+				AlternateView htmlView = AlternateView.CreateAlternateViewFromString(this.Html, null, "text/html");
+				this.message.AlternateViews.Add(htmlView);
+			}
+
+			// message.SubjectEncoding = Encoding.GetEncoding(charset);
+			// message.BodyEncoding = Encoding.GetEncoding(charset);
+			return this.message;
+		}
+
+		public void DisableBcc()
+		{
+			this.Header.Disable(Filters["Bcc"]);
+		}
+
+		public void DisableBypassListManagement()
+		{
+			this.Header.Disable(Filters["BypassListManagement"]);
+		}
+
+		public void DisableClickTracking()
+		{
+			this.Header.Disable(Filters["ClickTracking"]);
+		}
+
+		public void DisableFooter()
+		{
+			this.Header.Disable(Filters["Footer"]);
+		}
+
+		public void DisableGoogleAnalytics()
+		{
+			this.Header.Disable(Filters["GoogleAnalytics"]);
+		}
+
+		public void DisableGravatar()
+		{
+			this.Header.Disable(Filters["Gravatar"]);
+		}
+
+		public void DisableOpenTracking()
+		{
+			this.Header.Disable(Filters["OpenTracking"]);
+		}
+
+		public void DisableSpamCheck()
+		{
+			this.Header.Disable(Filters["SpamCheck"]);
+		}
+
+		public void DisableTemplate()
+		{
+			this.Header.Disable(Filters["Template"]);
+		}
+
+		public void DisableUnsubscribe()
+		{
+			this.Header.Disable(Filters["Unsubscribe"]);
+		}
+
+		public void EnableBcc(string email)
+		{
+			string filter = Filters["Bcc"];
+
+			this.Header.Enable(filter);
+			this.Header.AddFilterSetting(filter, new List<string> { "email" }, email);
+		}
+
+		public void EnableBypassListManagement()
+		{
+			this.Header.Enable(Filters["BypassListManagement"]);
+		}
+
+		public void EnableClickTracking(bool includePlainText = false)
+		{
+			string filter = Filters["ClickTracking"];
+
+			this.Header.Enable(filter);
+			if (includePlainText)
+			{
+				this.Header.AddFilterSetting(filter, new List<string> { "enable_text" }, "1");
+			}
+		}
+
+		public void EnableFooter(string text = null, string html = null)
+		{
+			string filter = Filters["Footer"];
+
+			this.Header.Enable(filter);
+			this.Header.AddFilterSetting(filter, new List<string> { "text/plain" }, text);
+			this.Header.AddFilterSetting(filter, new List<string> { "text/html" }, html);
+		}
+
+		public void EnableGoogleAnalytics(string source, string medium, string term, string content = null, string campaign = null)
+		{
+			string filter = Filters["GoogleAnalytics"];
+
+			this.Header.Enable(filter);
+			this.Header.AddFilterSetting(filter, new List<string> { "utm_source" }, source);
+			this.Header.AddFilterSetting(filter, new List<string> { "utm_medium" }, medium);
+			this.Header.AddFilterSetting(filter, new List<string> { "utm_term" }, term);
+			this.Header.AddFilterSetting(filter, new List<string> { "utm_content" }, content);
+			this.Header.AddFilterSetting(filter, new List<string> { "utm_campaign" }, campaign);
+		}
+
+		public void EnableGravatar()
+		{
+			this.Header.Enable(Filters["Gravatar"]);
+		}
+
+		public void EnableOpenTracking()
+		{
+			this.Header.Enable(Filters["OpenTracking"]);
+		}
+
+		public void EnableSpamCheck(int score = 5, string url = null)
+		{
+			string filter = Filters["SpamCheck"];
+
+			this.Header.Enable(filter);
+			this.Header.AddFilterSetting(filter, new List<string> { "maxscore" }, score.ToString(CultureInfo.InvariantCulture));
+			this.Header.AddFilterSetting(filter, new List<string> { "url" }, url);
+		}
+
+		public void EnableTemplate(string html)
+		{
+			string filter = Filters["Template"];
+
+			if (!Regex.IsMatch(html, ReHtml))
+			{
+				throw new Exception("Missing substitution replacementTag in html");
+			}
+
+			this.Header.Enable(filter);
+			this.Header.AddFilterSetting(filter, new List<string> { "text/html" }, html);
+		}
+
+		public void EnableUnsubscribe(string text, string html)
+		{
+			string filter = Filters["Unsubscribe"];
+
+			if (!Regex.IsMatch(text, ReText))
+			{
+				throw new Exception("Missing substitution replacementTag in text");
+			}
+
+			if (!Regex.IsMatch(html, ReHtml))
+			{
+				throw new Exception("Missing substitution replacementTag in html");
+			}
+
+			this.Header.Enable(filter);
+			this.Header.AddFilterSetting(filter, new List<string> { "text/plain" }, text);
+			this.Header.AddFilterSetting(filter, new List<string> { "text/html" }, html);
+		}
+
+		public void EnableUnsubscribe(string replace)
+		{
+			string filter = Filters["Unsubscribe"];
+
+			this.Header.Enable(filter);
+			this.Header.AddFilterSetting(filter, new List<string> { "replace" }, replace);
+		}
+
+		public IEnumerable<string> GetRecipients()
+		{
+			List<MailAddress> tos = this.message.To.ToList();
+			List<MailAddress> ccs = this.message.CC.ToList();
+			List<MailAddress> bccs = this.message.Bcc.ToList();
+
+			IEnumerable<string> rcpts = tos.Union(ccs.Union(bccs)).Select(address => address.Address);
+			return rcpts;
+		}
+
+		public void SetCategory(string category)
+		{
+			this.Header.SetCategory(category);
+		}
+
+		#endregion
+
+		#region Methods
+
+		/// <summary>
+		///     Helper function lets us look at the mime before it is sent
+		/// </summary>
+		/// <param name="directory">directory in which we store this mime message</param>
+		internal void SaveMessage(string directory)
+		{
+			SmtpClient client = new SmtpClient("localhost") { DeliveryMethod = SmtpDeliveryMethod.SpecifiedPickupDirectory, PickupDirectoryLocation = @"C:\temp" };
+			MailMessage msg = this.CreateMimeMessage();
+			client.Send(msg);
+		}
+
+		private static Dictionary<string, string> InitializeFilters()
+		{
+			return new Dictionary<string, string> { { "Gravatar", "gravatar" }, { "OpenTracking", "opentrack" }, { "ClickTracking", "clicktrack" }, { "SpamCheck", "spamcheck" }, { "Unsubscribe", "subscriptiontrack" }, { "Footer", "footer" }, { "GoogleAnalytics", "ganalytics" }, { "Template", "template" }, { "Bcc", "bcc" }, { "BypassListManagement", "bypass_list_management" } };
+		}
+
+		#endregion
+	}
 }
